@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>🎙️ Voice Assistant</title>
+  <style>
+    body {
+      background-color: #0d1117;
+      color: #c9d1d9;
+      font-family: "Segoe UI", sans-serif;
+      text-align: center;
+      padding: 2rem;
+    }
+
+    h1 {
+      color: #58a6ff;
+      margin-bottom: 1rem;
+    }
+
+    button {
+      font-size: 1.2rem;
+      padding: 1rem 2rem;
+      border: none;
+      border-radius: 1rem;
+      cursor: pointer;
+      background-color: #238636;
+      color: white;
+      transition: background-color 0.3s ease;
+    }
+
+    button.recording {
+      background-color: #da3633;
+    }
+
+    #status {
+      margin-top: 1rem;
+      font-size: 1rem;
+      color: #8b949e;
+    }
+
+    #waveform, #responseWave {
+      width: 100%;
+      max-width: 600px;
+      margin: 2rem auto 0;
+      height: 100px;
+      background: #161b22;
+      border-radius: 1rem;
+      overflow: hidden;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100px;
+    }
+
+    #spinner {
+      display: none;
+      margin: 1rem auto;
+      border: 6px solid #161b22;
+      border-top: 6px solid #58a6ff;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <h1>🧠 Voice Assistant</h1>
+  <button id="recordBtn">🎙️ Aufnahme starten</button>
+  <p id="status">Bereit</p>
+
+  <div id="waveform"><canvas id="visualizer"></canvas></div>
+  <div id="spinner"></div>
+  <div id="responseWave"><canvas id="responseVisualizer"></canvas></div>
+
+  <script>
+    const recordBtn = document.getElementById("recordBtn");
+    const statusText = document.getElementById("status");
+    const canvas = document.getElementById("visualizer");
+    const responseCanvas = document.getElementById("responseVisualizer");
+    const ctx = canvas.getContext("2d");
+    const ctx2 = responseCanvas.getContext("2d");
+    const spinner = document.getElementById("spinner");
+
+    let mediaRecorder;
+    let audioChunks = [];
+    let animationId;
+    let analyser, dataArray;
+
+    const webhookURL = "https://n8n-0v5jm-u24277.vm.elestio.app/webhook/4af1e653-d265-4073-84be-068e9b5b7963";
+
+    async function visualize(stream, canvasContext) {
+      const audioCtx = new AudioContext();
+      const source = audioCtx.createMediaStreamSource(stream);
+      analyser = audioCtx.createAnalyser();
+      source.connect(analyser);
+      analyser.fftSize = 2048;
+      const bufferLength = analyser.frequencyBinCount;
+      dataArray = new Uint8Array(bufferLength);
+
+      function draw() {
+        animationId = requestAnimationFrame(draw);
+        analyser.getByteTimeDomainData(dataArray);
+        canvasContext.fillStyle = "#161b22";
+        canvasContext.fillRect(0, 0, canvas.width, canvas.height);
+        canvasContext.lineWidth = 2;
+        canvasContext.strokeStyle = "#58a6ff";
+        canvasContext.beginPath();
+
+        const sliceWidth = canvas.width / bufferLength;
+        let x = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          const v = dataArray[i] / 128.0;
+          const y = v * canvas.height / 2;
+          i === 0 ? canvasContext.moveTo(x, y) : canvasContext.lineTo(x, y);
+          x += sliceWidth;
+        }
+        canvasContext.lineTo(canvas.width, canvas.height / 2);
+        canvasContext.stroke();
+      }
+      draw();
+    }
+
+    async function playAudioWithWaveform(url) {
+      const audio = new Audio(url);
+      const audioCtx = new AudioContext();
+      const source = audioCtx.createMediaElementSource(audio);
+      const analyser = audioCtx.createAnalyser();
+      source.connect(analyser);
+      analyser.connect(audioCtx.destination);
+      analyser.fftSize = 2048;
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      function draw() {
+        requestAnimationFrame(draw);
+        analyser.getByteTimeDomainData(dataArray);
+        ctx2.fillStyle = "#161b22";
+        ctx2.fillRect(0, 0, responseCanvas.width, responseCanvas.height);
+        ctx2.lineWidth = 2;
+        ctx2.strokeStyle = "#58a6ff";
+        ctx2.beginPath();
+
+        const sliceWidth = responseCanvas.width / bufferLength;
+        let x = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          const v = dataArray[i] / 128.0;
+          const y = v * responseCanvas.height / 2;
+          i === 0 ? ctx2.moveTo(x, y) : ctx2.lineTo(x, y);
+          x += sliceWidth;
+        }
+        ctx2.lineTo(responseCanvas.width, responseCanvas.height / 2);
+        ctx2.stroke();
+      }
+
+      draw();
+      audio.play();
+    }
+
+    recordBtn.addEventListener("click", async () => {
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        mediaRecorder.stop();
+        cancelAnimationFrame(animationId);
+        statusText.textContent = "⏳ Verarbeitung läuft...";
+        recordBtn.disabled = true;
+        spinner.style.display = "block";
+      } else {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        await visualize(stream, ctx);
+
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+
+        mediaRecorder.start();
+        recordBtn.textContent = "🛑 Aufnahme stoppen";
+        recordBtn.classList.add("recording");
+        statusText.textContent = "🎙️ Aufnahme läuft...";
+
+        mediaRecorder.addEventListener("dataavailable", event => {
+          audioChunks.push(event.data);
+        });
+
+        mediaRecorder.addEventListener("stop", async () => {
+          const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+          const formData = new FormData();
+          formData.append("file", audioBlob, "aufnahme.webm");
+
+          try {
+            const response = await fetch(webhookURL, {
+              method: "POST",
+              body: formData
+            });
+
+            if (!response.ok) throw new Error("Webhook-Fehler");
+
+            const arrayBuffer = await response.arrayBuffer();
+            const responseBlob = new Blob([arrayBuffer], { type: "audio/mp3" });
+            const audioUrl = URL.createObjectURL(responseBlob);
+
+            spinner.style.display = "none";
+            await playAudioWithWaveform(audioUrl);
+
+            statusText.textContent = "✅ Antwort wird abgespielt.";
+          } catch (err) {
+            console.error(err);
+            statusText.textContent = "❌ Fehler beim Abrufen der Antwort.";
+            spinner.style.display = "none";
+          }
+
+          recordBtn.disabled = false;
+          recordBtn.textContent = "🎙️ Aufnahme starten";
+          recordBtn.classList.remove("recording");
+        });
+      }
+    });
+  </script>
+</body>
+</html>
